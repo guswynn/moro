@@ -1,4 +1,4 @@
-use futures::future::BoxFuture;
+use futures::future::LocalBoxFuture;
 
 #[macro_use]
 mod macros;
@@ -85,11 +85,11 @@ pub use self::scope_body::ScopeBody;
 
 /// Creates a new moro scope. Normally, you invoke this through `moro::async_scope!`.
 pub fn scope_fn<'env, T, C>(
-    body: impl for<'scope> FnOnce(&'scope Scope<'scope, 'env, C>) -> BoxFuture<'scope, T>,
+    body: impl for<'scope> FnOnce(&'scope Scope<'scope, 'env, C>) -> LocalBoxFuture<'scope, T>,
 ) -> ScopeBody<'env, T, C>
 where
     T: Unpin + 'env,
-    C: Send + 'env,
+    C: 'env,
 {
     let scope = Scope::new();
 

@@ -1,6 +1,6 @@
 use std::{sync::Arc, task::Poll};
 
-use futures::{future::BoxFuture, Future, FutureExt};
+use futures::{future::LocalBoxFuture, Future, FutureExt};
 
 use crate::scope::Scope;
 
@@ -17,8 +17,8 @@ use crate::scope::Scope;
 /// # Unsafe contract
 ///
 /// - `body_future` and `result` will be dropped BEFORE `scope`.
-pub(crate) struct Body<'scope, 'env: 'scope, T: 'env + Unpin, C: Send + 'env> {
-    body_future: Option<BoxFuture<'scope, T>>,
+pub(crate) struct Body<'scope, 'env: 'scope, T: 'env + Unpin, C: 'env> {
+    body_future: Option<LocalBoxFuture<'scope, T>>,
     result: Option<T>,
     scope: Arc<Scope<'scope, 'env, C>>,
 }
@@ -26,12 +26,11 @@ pub(crate) struct Body<'scope, 'env: 'scope, T: 'env + Unpin, C: Send + 'env> {
 impl<'scope, 'env, T, C> Body<'scope, 'env, T, C>
 where
     T: Unpin,
-    C: Send,
 {
     /// # Unsafe contract
     ///
     /// - `future` will be dropped BEFORE `scope`
-    pub(crate) fn new(future: BoxFuture<'scope, T>, scope: Arc<Scope<'scope, 'env, C>>) -> Self {
+    pub(crate) fn new(future: LocalBoxFuture<'scope, T>, scope: Arc<Scope<'scope, 'env, C>>) -> Self {
         Self {
             body_future: Some(future),
             result: None,
@@ -49,7 +48,6 @@ where
 impl<'scope, 'env, T, C> Drop for Body<'scope, 'env, T, C>
 where
     T: Unpin,
-    C: Send,
 {
     fn drop(&mut self) {
         // Fulfill our unsafe contract and ensure we drop other fields
@@ -61,7 +59,6 @@ where
 impl<'scope, 'env, T, C> Future for Body<'scope, 'env, T, C>
 where
     T: Unpin,
-    C: Send,
 {
     type Output = Result<T, C>;
 

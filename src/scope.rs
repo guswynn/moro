@@ -5,34 +5,30 @@ use std::{
     task::Poll,
 };
 
-use futures::{future::BoxFuture, stream::FuturesUnordered, Future, Stream};
+use futures::{future::LocalBoxFuture, stream::FuturesUnordered, Future, Stream};
 
-pub struct Scope<'scope, 'env: 'scope, C: Send + 'env> {
+pub struct Scope<'scope, 'env: 'scope, C: 'env> {
     /// Stores the set of futures that have been spawned.
     ///
     /// This is behind a mutex so that multiple concurrent actors can access it.
     /// A `RwLock` seems better, but `FuturesUnordered is not `Sync` in the case.
     /// But in fact it doesn't matter anyway, because all spawned futures execute
     /// CONCURRENTLY and hence there will be no contention.
-    futures: Mutex<Pin<Box<FuturesUnordered<BoxFuture<'scope, ()>>>>>,
-    enqueued: Mutex<Vec<BoxFuture<'scope, ()>>>,
+    futures: Mutex<Pin<Box<FuturesUnordered<LocalBoxFuture<'scope, ()>>>>>,
+    enqueued: Mutex<Vec<LocalBoxFuture<'scope, ()>>>,
     cancelled: Mutex<Option<C>>,
     phantom: PhantomData<&'scope &'env ()>,
 }
 
-fn is_sync<T: Sync>(t: T) -> T {
-    t
-}
-
-impl<'scope, 'env, C: Send> Scope<'scope, 'env, C> {
+impl<'scope, 'env, C> Scope<'scope, 'env, C> {
     /// Create a scope.
     pub(crate) fn new() -> Arc<Self> {
-        Arc::new(is_sync(Self {
+        Arc::new(Self {
             futures: Mutex::new(Box::pin(FuturesUnordered::new())),
             enqueued: Default::default(),
             cancelled: Default::default(),
             phantom: Default::default(),
-        }))
+        })
     }
 
     /// Polls the jobs that were spawned thus far. Returns:
@@ -86,7 +82,7 @@ impl<'scope, 'env, C: Send> Scope<'scope, 'env, C> {
     /// This returns a future that you can await, but it will never complete (because you will never be reawoken).
     pub fn cancel<T>(&'scope self, value: C) -> impl Future<Output = T> + 'scope
     where
-        T: std::fmt::Debug + Send + 'scope,
+        T: std::fmt::Debug + 'scope,
     {
         let mut lock = self.cancelled.lock().unwrap();
         if lock.is_none() {
@@ -103,10 +99,10 @@ impl<'scope, 'env, C: Send> Scope<'scope, 'env, C> {
     /// The scope will not terminate until this job completes or the scope is cancelled.
     pub fn spawn<T>(
         &'scope self,
-        future: impl Future<Output = T> + Send + 'scope,
-    ) -> impl Future<Output = T> + Send + 'scope
+        future: impl Future<Output = T> + 'scope,
+    ) -> impl Future<Output = T> + 'scope
     where
-        T: std::fmt::Debug + Send + 'scope,
+        T: std::fmt::Debug + 'scope,
     {
         // Use a channel to communicate result from the *actual* future
         // (which lives in the futures-unordered) and the caller.
@@ -137,10 +133,10 @@ impl<'scope, 'env, C: Send> Scope<'scope, 'env, C> {
     /// returns `Ok(v)`, then `v` is used as the result of the job.
     pub fn spawn_cancelling<T>(
         &'scope self,
-        future: impl Future<Output = Result<T, C>> + Send + 'scope,
-    ) -> impl Future<Output = T> + Send + 'scope
+        future: impl Future<Output = Result<T, C>> + 'scope,
+    ) -> impl Future<Output = T> + 'scope
     where
-        T: std::fmt::Debug + Send + 'scope,
+        T: std::fmt::Debug + 'scope,
     {
         // Use a channel to communicate result from the *actual* future
         // (which lives in the futures-unordered) and the caller.
