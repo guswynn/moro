@@ -132,6 +132,45 @@ impl<'scope, 'env, C: Send> Scope<'scope, 'env, C> {
         }
     }
 
+    /// Currently, WILDLY unsafe
+    pub unsafe fn spawn_parallel<T>(
+        &'scope self,
+        future: impl Future<Output = T> + Send + 'scope,
+    ) -> impl Future<Output = T> + Send + 'scope
+    where
+        // can `T` be made `'scope` as well??
+        T: std::fmt::Debug + Send + 'static,
+    {
+        // Use a channel to communicate result from the *actual* future
+        // (which lives in the futures-unordered) and the caller.
+        // This is kind of crappy because, ideally, the caller expressing interest
+        // in the result of the future would let it run, but that would require
+        // more clever coding and I'm just trying to stand something up quickly
+        // here. What will happen when caller expresses an interest in result
+        // now is that caller will block which should (eventually) allow the
+        // futures-unordered to be polled and make progress. Good enough.
+
+        let (tx, rx) = async_channel::bounded(1);
+
+        self.enqueued.lock().unwrap().push(Box::pin(async move {
+            // unclear why we have to box here, to me
+            let future: Pin<Box<dyn Future<Output = T> + Send + 'scope>> = Box::pin(future);
+            let future: Pin<Box<dyn Future<Output = T> + Send + 'static>> =
+                unsafe { std::mem::transmute(future) };
+            let v = tokio::spawn(future)
+                .await
+                .expect("I am not handling panics yet");
+            let _ = tx.send(v).await;
+        }));
+
+        async move {
+            match rx.recv().await {
+                Ok(v) => v,
+                Err(e) => panic!("unexpected error: {e:?}"),
+            }
+        }
+    }
+
     /// Spawn a job that returns `Result`. If the task returns `Err`, the
     /// scope will be canceled as if [`Scope::cancel`] were called. If the job
     /// returns `Ok(v)`, then `v` is used as the result of the job.
