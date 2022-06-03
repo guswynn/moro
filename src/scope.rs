@@ -5,7 +5,7 @@ use std::{
     task::Poll,
 };
 
-use futures::{future::LocalBoxFuture, stream::FuturesUnordered, Future, Stream};
+use futures::{future::LocalBoxFuture, stream::FuturesOrdered, Future, Stream};
 
 pub struct Scope<'scope, 'env: 'scope, C: 'env> {
     /// Stores the set of futures that have been spawned.
@@ -14,7 +14,7 @@ pub struct Scope<'scope, 'env: 'scope, C: 'env> {
     /// A `RwLock` seems better, but `FuturesUnordered is not `Sync` in the case.
     /// But in fact it doesn't matter anyway, because all spawned futures execute
     /// CONCURRENTLY and hence there will be no contention.
-    futures: Mutex<Pin<Box<FuturesUnordered<LocalBoxFuture<'scope, ()>>>>>,
+    futures: Mutex<Option<Pin<Box<FuturesOrdered<LocalBoxFuture<'scope, ()>>>>>>,
     enqueued: Mutex<Vec<LocalBoxFuture<'scope, ()>>>,
     cancelled: Mutex<Option<C>>,
     phantom: PhantomData<&'scope &'env ()>,
@@ -24,7 +24,7 @@ impl<'scope, 'env, C> Scope<'scope, 'env, C> {
     /// Create a scope.
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
-            futures: Mutex::new(Box::pin(FuturesUnordered::new())),
+            futures: Mutex::new(Some(Box::pin(FuturesOrdered::new()))),
             enqueued: Default::default(),
             cancelled: Default::default(),
             phantom: Default::default(),
@@ -49,9 +49,12 @@ impl<'scope, 'env, C> Scope<'scope, 'env, C> {
                 return Poll::Ready(Err(c));
             }
 
-            futures.extend(self.enqueued.lock().unwrap().drain(..));
+            futures
+                .as_mut()
+                .unwrap()
+                .extend(self.enqueued.lock().unwrap().drain(..));
 
-            while let Some(()) = ready!(futures.as_mut().poll_next(cx)) {
+            while let Some(()) = ready!(futures.as_mut().unwrap().as_mut().poll_next(cx)) {
                 // once we are cancelled, we do no more work.
                 if self.cancelled.lock().unwrap().is_some() {
                     continue 'outer;
@@ -72,7 +75,11 @@ impl<'scope, 'env, C> Scope<'scope, 'env, C> {
     ///
     /// Once this returns, there are no more pending tasks.
     pub(crate) fn clear(&self) {
-        self.futures.lock().unwrap().clear();
+        let _ = self
+            .futures
+            .lock()
+            .unwrap()
+            .insert(Box::pin(FuturesOrdered::new()));
         self.enqueued.lock().unwrap().clear();
     }
 
